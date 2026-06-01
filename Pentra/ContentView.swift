@@ -37,18 +37,143 @@ struct ContentView: View {
                     .foregroundColor(.primary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
-                    .background(Color(NSColor.controlBackgroundColor))
+                    .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
                     .cornerRadius(8)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.primary.opacity(0.2), lineWidth: 1)
+                            .stroke(Color.primary.opacity(0.15), lineWidth: 1)
                     )
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 15)
                 .padding(.horizontal, 10)
                 
+                VStack(spacing: 8) {
+                    Text("Find Wallpapers")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary.opacity(0.8))
+                        .textCase(.uppercase)
+                    
+                    VStack(spacing: 6) {
+                        HStack(spacing: 6) {
+                            Button(action: {
+                                NSWorkspace.shared.open(URL(string: "https://moewalls.com/")!)
+                            }) {
+                                Text("Moewalls")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 4)
+                                    .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                                    .cornerRadius(6)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            
+                            Button(action: {
+                                NSWorkspace.shared.open(URL(string: "https://motionbgs.com/")!)
+                            }) {
+                                Text("MotionBGS")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 4)
+                                    .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                                    .cornerRadius(6)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        
+                        HStack(spacing: 6) {
+                            Button(action: {
+                                NSWorkspace.shared.open(URL(string: "https://wallhaven.cc/")!)
+                            }) {
+                                Text("Wallhaven")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 4)
+                                    .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                                    .cornerRadius(6)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            
+                            Button(action: {
+                                NSWorkspace.shared.open(URL(string: "https://unsplash.com/")!)
+                            }) {
+                                Text("Unsplash")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 4)
+                                    .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                                    .cornerRadius(6)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                }
+                .padding(.top, 10)
+                
                 Spacer()
+                
+                VStack(spacing: 12) {
+                    HStack(spacing: 18) {
+                        Button(action: {
+                            NSWorkspace.shared.open(URL(string: "https://github.com/coflyn")!)
+                        }) {
+                            Image("github")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 16, height: 16)
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        
+                        Button(action: {
+                            NSWorkspace.shared.open(URL(string: "https://instagram.com/_coflyn")!)
+                        }) {
+                            Image("instagram")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 16, height: 16)
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    
+                    VStack(spacing: 6) {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(settings.isPaused ? Color.yellow : Color.green)
+                                .frame(width: 6, height: 6)
+                            Text(settings.isPaused ? "Engine Paused" : "Engine Running")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Text("Version 1.0.0 • © 2026 Coflyn")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary.opacity(0.5))
+                    }
+                }
+                .padding(.bottom, 5)
             }
             .padding(25)
             .frame(width: 220)
@@ -63,8 +188,7 @@ struct ContentView: View {
                     SettingsCard(title: "Wallpaper Source") {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 12) {
-                                ForEach(settings.playlistPaths.indices, id: \.self) { index in
-                                    let path = settings.playlistPaths[index]
+                                ForEach(Array(settings.playlistPaths.enumerated()), id: \.element) { index, path in
                                     ZStack(alignment: .topTrailing) {
                                         VideoThumbnailView(path: path)
                                             .frame(width: 120, height: 80)
@@ -212,14 +336,41 @@ struct ContentView: View {
                                 .font(.body)
                                 .foregroundColor(.primary)
                             Spacer()
-                            Picker("", selection: $settings.pauseBatteryThreshold) {
+                            Picker("", selection: Binding(
+                                get: {
+                                    let predefined = [0, 20, 50]
+                                    return predefined.contains(settings.pauseBatteryThreshold) ? settings.pauseBatteryThreshold : -1
+                                },
+                                set: { newValue in
+                                    if newValue == -1 {
+                                        if [0, 20, 50].contains(settings.pauseBatteryThreshold) {
+                                            settings.pauseBatteryThreshold = 30
+                                        }
+                                    } else {
+                                        settings.pauseBatteryThreshold = newValue
+                                    }
+                                }
+                            )) {
                                 Text("Never").tag(0)
                                 Text("< 20%").tag(20)
                                 Text("< 50%").tag(50)
-                                Text("Always").tag(100)
+                                Text("Custom").tag(-1)
                             }
-                            .frame(width: 120)
+                            .frame(width: 90)
+                            
+                            if ![0, 20, 50].contains(settings.pauseBatteryThreshold) {
+                                HStack(spacing: 4) {
+                                    Text("<")
+                                        .foregroundColor(.secondary)
+                                    TextField("%", value: $settings.pauseBatteryThreshold, formatter: NumberFormatter())
+                                        .frame(width: 45)
+                                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                                        .multilineTextAlignment(.center)
+                                }
+                            }
                         }
+                        Divider()
+                        ToggleRow(icon: "leaf", title: "Smart Power Saving", isOn: $settings.smartPowerSaving)
                         Divider()
                         ToggleRow(icon: "power", title: "Start at Login", isOn: $settings.launchAtLogin)
                         Divider()
@@ -328,7 +479,7 @@ struct VideoThumbnailView: View {
     }
     
     private func generateThumbnailAsync() {
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task {
             let url = URL(fileURLWithPath: path)
             let ext = url.pathExtension.lowercased()
             if ["jpg", "jpeg", "png", "heic", "gif", "webp"].contains(ext) {
@@ -338,19 +489,19 @@ struct VideoThumbnailView: View {
                 return
             }
             
-            let asset = AVAsset(url: url)
+            let asset = AVURLAsset(url: url)
             let imageGenerator = AVAssetImageGenerator(asset: asset)
             imageGenerator.appliesPreferredTrackTransform = true
             imageGenerator.maximumSize = CGSize(width: 300, height: 300)
             
             let time = CMTime(seconds: 1.0, preferredTimescale: 600)
             
-            if let cgImage = try? imageGenerator.copyCGImage(at: time, actualTime: nil) {
+            if let (cgImage, _) = try? await imageGenerator.image(at: time) {
                 let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
                 DispatchQueue.main.async { self.thumbnail = image }
             } else {
                 let timeZero = CMTime(seconds: 0.0, preferredTimescale: 600)
-                if let cgImage = try? imageGenerator.copyCGImage(at: timeZero, actualTime: nil) {
+                if let (cgImage, _) = try? await imageGenerator.image(at: timeZero) {
                     let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
                     DispatchQueue.main.async { self.thumbnail = image }
                 }

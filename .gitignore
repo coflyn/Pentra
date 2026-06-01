@@ -38,3 +38,7 @@ playground.xcworkspace
 
 # Mac OS
 .DS_Store
+
+# Test Directories
+PentraTests/
+PentraUITests/
