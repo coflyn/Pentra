@@ -240,6 +240,7 @@ class PlayerNSView: NSView {
     let playerLayer = AVPlayerLayer()
     var batteryTimer: Timer?
     var pauseWorkItem: DispatchWorkItem?
+    var onWake: (() -> Void)?
     
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -342,15 +343,9 @@ class PlayerNSView: NSView {
     }
     
     @objc func handleWake() {
-        guard let player = playerLayer.player else { return }
-        
-        playerLayer.player = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.playerLayer.player = player
-            
-            player.seek(to: player.currentTime(), toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                self?.evaluatePlayback()
-            }
+        onWake?()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.evaluatePlayback()
         }
     }
 }
@@ -395,6 +390,10 @@ struct LoopingPlayerView: NSViewRepresentable {
         context.coordinator.playerLayer = view.playerLayer
         play(url: url, player: player, context: context)
         applySettings(to: player, layer: view.playerLayer, view: view)
+        
+        view.onWake = {
+            play(url: url, player: player, context: context)
+        }
         
         return view
     }
