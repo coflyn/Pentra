@@ -168,7 +168,7 @@ struct ContentView: View {
                                 .foregroundColor(.secondary)
                         }
                         
-                        Text("Version 1.0.0 • © 2026 Coflyn")
+                        Text("Version 1.1.0 • © 2026 Coflyn")
                             .font(.system(size: 9))
                             .foregroundColor(.secondary.opacity(0.5))
                     }
@@ -200,8 +200,10 @@ struct ContentView: View {
                                         
                                         Button(action: {
                                             var paths = settings.playlistPaths
-                                            paths.remove(at: index)
-                                            settings.playlistPaths = paths
+                                            if let idx = paths.firstIndex(of: path) {
+                                                paths.remove(at: idx)
+                                                settings.playlistPaths = paths
+                                            }
                                         }) {
                                             Image(systemName: "xmark.circle.fill")
                                                 .foregroundColor(.red)

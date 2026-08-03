@@ -3,6 +3,7 @@
 ![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg?style=flat)
 ![macOS](https://img.shields.io/badge/macOS-13.0+-black.svg?style=flat&logo=apple)
 ![Framework](https://img.shields.io/badge/Framework-SwiftUI-blue.svg?style=flat)
+![Version](https://img.shields.io/badge/Version-1.1.0-blue.svg?style=flat)
 ![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat)
 
 Pentra is a lightweight, high-performance Live Wallpaper engine for macOS built natively with Swift, SwiftUI, and AppKit. It allows you to set any MP4/MOV video, animated GIF, or static image as your desktop background without sacrificing system performance.
@@ -24,7 +25,16 @@ Pentra is a lightweight, high-performance Live Wallpaper engine for macOS built 
 - **Menu Bar Integration:** Easily accessible from your macOS Menu Bar.
 - **Customizable Display & Audio:** Choose between Fill, Fit, or Stretch scale modes, and adjust video volume (or mute completely).
 
-## What's New
+## What's New in v1.1.0
+
+- **Zero-Leak Engine Architecture:** Fixed strong reference cycles in `PlayerNSView` timer loops and observers, completely eliminating RAM leaks during playlist cycling and display configuration changes.
+- **Instant Sleep/Wake Recovery:** Restructured wake handlers to preserve `AVPlayerItem` status and seek gracefully without destroying looper instances, eliminating black screen delays when waking from sleep.
+- **Disk Footprint Optimization:** Optimized native wallpaper sync to use a single fixed temporary image file, preventing `/tmp` file accumulation.
+- **Task Cancellation & Anti-Race Engine:** Added strict task cancellation tokens (`loadTask?.cancel()`) to prevent out-of-order video loading when changing playlist items rapidly.
+- **Accurate Power Detection:** Upgraded battery status check to read `kIOPSPowerSourceStateKey` directly from `IOKit`, fixing false AC power reporting while estimating battery life.
+- **Safe UI Playlist Operations:** Updated playlist deletion logic to remove items by path reference, preventing out-of-bounds array exceptions.
+
+## Previous Updates (v1.0.0)
 
 - **Smart Power Saving:** Introduced dynamic video degradation logic. Pentra now hooks into macOS's native `ProcessInfoPowerStateDidChangeNotification` to detect *Low Power Mode*. When active, or when battery drops to critical levels, Pentra automatically throttles playback frame rates (down to 0.25x speed) to aggressively reduce GPU and CPU overhead while keeping your desktop feeling alive.
 - **Gapless Looping Architecture:** Re-engineered the video engine using `AVMutableComposition` to dynamically re-mux and trim audio tracks in real-time. By mathematically aligning the audio duration to perfectly match the video duration, this entirely eliminates the black-frame flicker in `AVPlayerLooper` without sacrificing volume control.
