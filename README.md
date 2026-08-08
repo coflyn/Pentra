@@ -63,6 +63,20 @@ Pentra/
 - **Accurate Power Detection:** Upgraded battery status check to read `kIOPSPowerSourceStateKey` directly from `IOKit`, fixing false AC power reporting while estimating battery life.
 - **Safe UI Playlist Operations:** Updated playlist deletion logic to remove items by path reference, preventing out-of-bounds array exceptions.
 
+## Installation & Gatekeeper Fix
+
+1. Download **[Pentra.dmg](Pentra.dmg)** from this repository.
+2. Open the `.dmg` file and drag **Pentra.app** into your `/Applications` folder.
+
+> [!IMPORTANT]
+> **macOS Gatekeeper Warning ("App is damaged" or "Developer cannot be verified"):**
+> Because Pentra is a free open-source app distributed directly without a paid Apple Developer ID signature, macOS Gatekeeper may flag the downloaded app with a quarantine attribute.
+> 
+> To bypass this restriction and launch Pentra, open your **Terminal** app and run:
+> ```bash
+> sudo xattr -cr /Applications/Pentra.app
+> ```
+
 ## Requirements
 
 - macOS 13.0 (Ventura) or later.
