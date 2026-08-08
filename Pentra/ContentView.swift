@@ -168,7 +168,7 @@ struct ContentView: View {
                                 .foregroundColor(.secondary)
                         }
                         
-                        Text("Version 1.1.0 • © 2026 Coflyn")
+                        Text("Version 1.2.0 • © 2026 Coflyn")
                             .font(.system(size: 9))
                             .foregroundColor(.secondary.opacity(0.5))
                     }
@@ -189,14 +189,30 @@ struct ContentView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 12) {
                                 ForEach(Array(settings.playlistPaths.enumerated()), id: \.element) { index, path in
+                                    let isActive = settings.activeItems.last?.url.path == path
+                                    
                                     ZStack(alignment: .topTrailing) {
-                                        VideoThumbnailView(path: path)
-                                            .frame(width: 120, height: 80)
-                                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 8)
-                                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                                            )
+                                        Button(action: {
+                                            settings.selectWallpaper(at: index)
+                                        }) {
+                                            ZStack(alignment: .topLeading) {
+                                                VideoThumbnailView(path: path)
+                                                    .frame(width: 120, height: 80)
+                                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                                    .overlay(
+                                                        RoundedRectangle(cornerRadius: 8)
+                                                            .stroke(isActive ? Color.blue : Color.secondary.opacity(0.2), lineWidth: isActive ? 3 : 1)
+                                                    )
+                                                
+                                                if isActive {
+                                                    Image(systemName: "checkmark.circle.fill")
+                                                        .foregroundColor(.blue)
+                                                        .background(Circle().fill(Color.white))
+                                                        .padding(5)
+                                                }
+                                            }
+                                        }
+                                        .buttonStyle(.plain)
                                         
                                         Button(action: {
                                             var paths = settings.playlistPaths
@@ -237,12 +253,12 @@ struct ContentView: View {
                                 Spacer()
                                 Picker("", selection: Binding(
                                     get: {
-                                        let predefined = [1, 5, 10, 15, 30, 60]
+                                        let predefined = [0, 1, 5, 10, 15, 30, 60]
                                         return predefined.contains(settings.playlistInterval) ? settings.playlistInterval : -1
                                     },
                                     set: { newValue in
                                         if newValue == -1 {
-                                            if [1, 5, 10, 15, 30, 60].contains(settings.playlistInterval) {
+                                            if [0, 1, 5, 10, 15, 30, 60].contains(settings.playlistInterval) {
                                                 settings.playlistInterval = 2
                                             }
                                         } else {
@@ -250,6 +266,7 @@ struct ContentView: View {
                                         }
                                     }
                                 )) {
+                                    Text("Never").tag(0)
                                     Text("1 min").tag(1)
                                     Text("5 min").tag(5)
                                     Text("10 min").tag(10)
@@ -258,9 +275,9 @@ struct ContentView: View {
                                     Text("1 hour").tag(60)
                                     Text("Custom").tag(-1)
                                 }
-                                .frame(width: 100)
+                                .frame(width: 110)
                                 
-                                if ![1, 5, 10, 15, 30, 60].contains(settings.playlistInterval) {
+                                if ![0, 1, 5, 10, 15, 30, 60].contains(settings.playlistInterval) {
                                     TextField("Min", value: $settings.playlistInterval, formatter: NumberFormatter())
                                         .frame(width: 50)
                                         .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -268,6 +285,26 @@ struct ContentView: View {
                                 }
                             }
                         }
+                    }
+                    .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                        for provider in providers {
+                            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                                guard let url = url else { return }
+                                let path = url.path
+                                let ext = url.pathExtension.lowercased()
+                                let validExts = ["mp4", "mov", "m4v", "3gp", "jpg", "jpeg", "png", "heic", "webp", "gif"]
+                                if validExts.contains(ext) {
+                                    DispatchQueue.main.async {
+                                        var paths = settings.playlistPaths
+                                        if !paths.contains(path) {
+                                            paths.append(path)
+                                            settings.playlistPaths = paths
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return true
                     }
                     
                     SettingsCard(title: "Display & Audio") {
@@ -331,6 +368,8 @@ struct ContentView: View {
                         }
                         
                         Divider()
+                        ToggleRow(icon: "shuffle", title: "Shuffle Playlist", isOn: $settings.isShuffle)
+                        Divider()
                         ToggleRow(icon: "pause.circle", title: "Pause Wallpaper", isOn: $settings.isPaused)
                         Divider()
                         HStack {
@@ -393,7 +432,19 @@ struct ContentView: View {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowedContentTypes = [UTType.movie, UTType.mpeg4Movie, UTType.quickTimeMovie, UTType.image, UTType.gif, UTType.png, UTType.jpeg]
+        
+        let supportedTypes: [UTType?] = [
+            UTType.mpeg4Movie,
+            UTType.quickTimeMovie,
+            UTType(filenameExtension: "m4v"),
+            UTType(filenameExtension: "3gp"),
+            UTType.gif,
+            UTType.png,
+            UTType.jpeg,
+            UTType.heic,
+            UTType(filenameExtension: "webp")
+        ]
+        panel.allowedContentTypes = supportedTypes.compactMap { $0 }
         
         if panel.runModal() == .OK {
             var paths = settings.playlistPaths

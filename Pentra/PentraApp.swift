@@ -40,6 +40,7 @@ class WallpaperSettings: ObservableObject {
     @AppStorage("pauseBatteryThreshold") var pauseBatteryThreshold: Int = 100
     @AppStorage("smartPowerSaving") var smartPowerSaving: Bool = false
     @AppStorage("blurRadius") var blurRadius: Double = 0.0
+    @AppStorage("isShuffle") var isShuffle: Bool = false
     
     @AppStorage("syncMenuBar") var syncMenuBar: Bool = true {
         didSet { if syncMenuBar, let item = activeItems.last { syncNativeWallpaper(with: item) } }
@@ -52,12 +53,22 @@ class WallpaperSettings: ObservableObject {
     @Published var activeItems: [PlaylistItem] = []
     private var playlistTimer: Timer?
     private var currentIndex: Int = 0
+    private var syncTask: Task<Void, Never>?
+    private var useToggleSyncFile = false
+    
+    var validPlaylistPaths: [String] {
+        return playlistPaths.filter { path in
+            guard FileManager.default.fileExists(atPath: path) else { return false }
+            let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+            return ["mp4", "mov", "m4v", "3gp", "jpg", "jpeg", "png", "heic", "webp", "gif"].contains(ext)
+        }
+    }
     
     func updatePlaylistTimer() {
         playlistTimer?.invalidate()
-        let paths = playlistPaths
+        let paths = validPlaylistPaths
         
-        if paths.count > 1 {
+        if paths.count > 1 && playlistInterval > 0 {
             let safeInterval = max(1, playlistInterval)
             playlistTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(safeInterval * 60), repeats: true) { [weak self] _ in
                 self?.nextPlaylistVideo()
@@ -75,8 +86,9 @@ class WallpaperSettings: ObservableObject {
             if paths.isEmpty {
                 activeItems = []
             } else {
-                currentIndex = 0
-                let item = PlaylistItem(url: URL(fileURLWithPath: paths[0]))
+                let safeIndex = (currentIndex >= 0 && currentIndex < paths.count) ? currentIndex : 0
+                currentIndex = safeIndex
+                let item = PlaylistItem(url: URL(fileURLWithPath: paths[safeIndex]))
                 activeItems = [item]
             }
         }
@@ -90,12 +102,45 @@ class WallpaperSettings: ObservableObject {
         }
     }
     
+    func selectWallpaper(at index: Int) {
+        let paths = validPlaylistPaths
+        guard index >= 0 && index < paths.count else { return }
+        
+        currentIndex = index
+        let selectedPath = paths[index]
+        
+        if activeItems.last?.url.path == selectedPath { return }
+        
+        let newItem = PlaylistItem(url: URL(fileURLWithPath: selectedPath))
+        
+        withAnimation(.easeInOut(duration: 1.5)) {
+            activeItems.append(newItem)
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in
+            guard let self = self else { return }
+            if self.activeItems.count > 1 {
+                self.activeItems.removeFirst(self.activeItems.count - 1)
+            }
+            self.syncNativeWallpaper(with: newItem)
+        }
+    }
+    
     func nextPlaylistVideo() {
-        let paths = playlistPaths
+        let paths = validPlaylistPaths
         guard paths.count > 1 else { return }
         
         DispatchQueue.main.async {
-            self.currentIndex = (self.currentIndex + 1) % paths.count
+            if self.isShuffle {
+                var newIndex = Int.random(in: 0..<paths.count)
+                if newIndex == self.currentIndex {
+                    newIndex = (self.currentIndex + 1) % paths.count
+                }
+                self.currentIndex = newIndex
+            } else {
+                self.currentIndex = (self.currentIndex + 1) % paths.count
+            }
+            
             let newItem = PlaylistItem(url: URL(fileURLWithPath: paths[self.currentIndex]))
             
             withAnimation(.easeInOut(duration: 1.5)) {
@@ -111,20 +156,51 @@ class WallpaperSettings: ObservableObject {
         }
     }
     
+    private func resizedImage(_ image: NSImage, maxPixelSize: CGSize) -> NSImage {
+        let originalSize = image.size
+        guard originalSize.width > maxPixelSize.width || originalSize.height > maxPixelSize.height else {
+            return image
+        }
+        let widthRatio  = maxPixelSize.width / originalSize.width
+        let heightRatio = maxPixelSize.height / originalSize.height
+        let scaleFactor = min(widthRatio, heightRatio)
+        let newSize = CGSize(width: originalSize.width * scaleFactor, height: originalSize.height * scaleFactor)
+        
+        let newImage = NSImage(size: newSize)
+        newImage.lockFocus()
+        image.draw(in: NSRect(origin: .zero, size: newSize), from: NSRect(origin: .zero, size: originalSize), operation: .copy, fraction: 1.0)
+        newImage.unlockFocus()
+        return newImage
+    }
+    
     func syncNativeWallpaper(with item: PlaylistItem) {
         guard syncMenuBar else { return }
-        Task {
+        syncTask?.cancel()
+        
+        syncTask = Task {
             let ext = item.url.pathExtension.lowercased()
             let isImage = ["jpg", "jpeg", "png", "heic", "webp"].contains(ext)
             var imageToSet: NSImage?
             
+            let mainScreenSize = await MainActor.run {
+                NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
+            }
+            let target4KSize = CGSize(
+                width: min(3840, max(1920, mainScreenSize.width * 2)),
+                height: min(2160, max(1080, mainScreenSize.height * 2))
+            )
+            
+            if Task.isCancelled { return }
+            
             if isImage || ext == "gif" {
-                imageToSet = NSImage(contentsOf: item.url)
+                if let rawImage = NSImage(contentsOf: item.url) {
+                    imageToSet = self.resizedImage(rawImage, maxPixelSize: target4KSize)
+                }
             } else {
                 let asset = AVURLAsset(url: item.url)
                 let imageGenerator = AVAssetImageGenerator(asset: asset)
                 imageGenerator.appliesPreferredTrackTransform = true
-                imageGenerator.maximumSize = CGSize(width: 1920, height: 1080)
+                imageGenerator.maximumSize = target4KSize
                 let time = CMTime(seconds: 1.0, preferredTimescale: 600)
                 
                 if let (cgImage, _) = try? await imageGenerator.image(at: time) {
@@ -134,13 +210,26 @@ class WallpaperSettings: ObservableObject {
                 }
             }
             
-            guard let finalImage = imageToSet, let tiffData = finalImage.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiffData), let pngData = bitmap.representation(using: .png, properties: [:]) else { return }
+            if Task.isCancelled { return }
             
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("pentra_sync_wallpaper.png")
+            guard let finalImage = imageToSet,
+                  let tiffData = finalImage.tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: tiffData),
+                  let pngData = bitmap.representation(using: .png, properties: [:]) else { return }
+            
+            if Task.isCancelled { return }
+            
+            // Alternate between two filenames to break macOS desktop image URL caching
+            let filename = useToggleSyncFile ? "pentra_sync_a.png" : "pentra_sync_b.png"
+            useToggleSyncFile.toggle()
+            
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
             try? FileManager.default.removeItem(at: tempURL)
+            
             do {
                 try pngData.write(to: tempURL)
-                DispatchQueue.main.async {
+                if Task.isCancelled { return }
+                await MainActor.run {
                     for screen in NSScreen.screens {
                         try? NSWorkspace.shared.setDesktopImageURL(tempURL, for: screen, options: [:])
                     }
@@ -574,15 +663,42 @@ struct WallpaperView: View {
 @main
 struct PentraApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @ObservedObject var settings = globalSettings
+    
+    var activeItemTitle: String {
+        guard let item = settings.activeItems.last else { return "No Wallpaper" }
+        return item.url.deletingPathExtension().lastPathComponent
+    }
     
     var body: some Scene {
         MenuBarExtra("Pentra", systemImage: "photo.tv") {
+            Text("Now Playing: \(activeItemTitle)")
+                .font(.caption)
+            
+            Divider()
+            
+            Button(settings.isPaused ? "Resume Playback" : "Pause Playback") {
+                settings.isPaused.toggle()
+            }
+            
+            Button("Next Wallpaper") {
+                settings.nextPlaylistVideo()
+            }
+            
+            Button(settings.isMuted ? "Unmute Audio" : "Mute Audio") {
+                settings.isMuted.toggle()
+            }
+            
+            Divider()
+            
             Button("Open Settings") {
                 NSApp.setActivationPolicy(.regular)
                 appDelegate.settingsWindow?.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
             }
+            
             Divider()
+            
             Button("Quit") {
                 NSApplication.shared.terminate(nil)
             }
