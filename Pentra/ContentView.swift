@@ -26,7 +26,7 @@ struct ContentView: View {
                 }
                 
                 Button(action: {
-                    NSWorkspace.shared.open(URL(string: "https://sociabuzz.com/coflyn")!)
+                    NSWorkspace.shared.open(URL(string: "https://sociabuzz.com/coflyn/tribe")!)
                 }) {
                     HStack {
                         Image(systemName: "cup.and.saucer.fill")
@@ -413,9 +413,23 @@ struct ContentView: View {
                         Divider()
                         ToggleRow(icon: "leaf", title: "Smart Power Saving", isOn: $settings.smartPowerSaving)
                         Divider()
-                        ToggleRow(icon: "power", title: "Start at Login", isOn: $settings.launchAtLogin)
+                        ToggleRow(icon: "power", title: "Start at Login", isOn: Binding(
+                            get: { settings.launchAtLogin },
+                            set: { newValue in
+                                settings.launchAtLogin = newValue
+                                settings.toggleLaunchAtLogin()
+                            }
+                        ))
                         Divider()
-                        ToggleRow(icon: "menubar.rectangle", title: "Sync Menu Bar Color", isOn: $settings.syncMenuBar)
+                        ToggleRow(icon: "menubar.rectangle", title: "Sync Menu Bar Color", isOn: Binding(
+                            get: { settings.syncMenuBar },
+                            set: { newValue in
+                                settings.syncMenuBar = newValue
+                                if newValue {
+                                    settings.syncCurrentWallpaper()
+                                }
+                            }
+                        ))
                     }
                 }
                 .padding(25)
@@ -424,7 +438,17 @@ struct ContentView: View {
         }
         .frame(minWidth: 650, minHeight: 520)
         .background(.ultraThinMaterial)
-        .onAppear { settings.syncLaunchAtLoginState() }
+        .onAppear {
+            settings.syncLaunchAtLoginState()
+            if settings.syncMenuBar {
+                settings.syncCurrentWallpaper()
+            }
+        }
+        .onChange(of: settings.syncMenuBar) { newValue in
+            if newValue {
+                settings.syncCurrentWallpaper()
+            }
+        }
     }
     
     private func addVideo() {
@@ -509,6 +533,10 @@ struct ToggleRow: View {
     }
 }
 
+final class ThumbnailCache {
+    static let shared = NSCache<NSString, NSImage>()
+}
+
 struct VideoThumbnailView: View {
     let path: String
     @State private var thumbnail: NSImage?
@@ -527,7 +555,11 @@ struct VideoThumbnailView: View {
             }
         }
         .onAppear {
-            generateThumbnailAsync()
+            if let cached = ThumbnailCache.shared.object(forKey: path as NSString) {
+                self.thumbnail = cached
+            } else {
+                generateThumbnailAsync()
+            }
         }
     }
     
@@ -537,7 +569,8 @@ struct VideoThumbnailView: View {
             let ext = url.pathExtension.lowercased()
             if ["jpg", "jpeg", "png", "heic", "gif", "webp"].contains(ext) {
                 if let image = NSImage(contentsOf: url) {
-                    DispatchQueue.main.async { self.thumbnail = image }
+                    ThumbnailCache.shared.setObject(image, forKey: path as NSString)
+                    await MainActor.run { self.thumbnail = image }
                 }
                 return
             }
@@ -551,12 +584,14 @@ struct VideoThumbnailView: View {
             
             if let (cgImage, _) = try? await imageGenerator.image(at: time) {
                 let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-                DispatchQueue.main.async { self.thumbnail = image }
+                ThumbnailCache.shared.setObject(image, forKey: path as NSString)
+                await MainActor.run { self.thumbnail = image }
             } else {
                 let timeZero = CMTime(seconds: 0.0, preferredTimescale: 600)
                 if let (cgImage, _) = try? await imageGenerator.image(at: timeZero) {
                     let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-                    DispatchQueue.main.async { self.thumbnail = image }
+                    ThumbnailCache.shared.setObject(image, forKey: path as NSString)
+                    await MainActor.run { self.thumbnail = image }
                 }
             }
         }

@@ -8,6 +8,52 @@ struct PlaylistItem: Identifiable, Equatable {
     let url: URL
 }
 
+final class PowerManager {
+    static let shared = PowerManager()
+    private(set) var isOnBattery: Bool = false
+    private(set) var batteryPercentage: Int = 100
+    private var lastUpdate: Date = .distantPast
+    
+    private init() {
+        updatePowerStatus()
+    }
+    
+    func refreshIfNeeded(force: Bool = false) {
+        if force || Date().timeIntervalSince(lastUpdate) >= 15.0 {
+            updatePowerStatus()
+        }
+    }
+    
+    private func updatePowerStatus() {
+        lastUpdate = Date()
+        guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let sources = IOPSCopyPowerSourcesList(snapshot)?.takeRetainedValue() as? [CFTypeRef] else {
+            isOnBattery = false
+            batteryPercentage = 100
+            return
+        }
+        
+        var batteryFound = false
+        var currentCap = 100
+        var maxCap = 100
+        
+        for source in sources {
+            if let info = IOPSGetPowerSourceDescription(snapshot, source)?.takeUnretainedValue() as? [String: Any] {
+                if let state = info[kIOPSPowerSourceStateKey] as? String, state == kIOPSBatteryPowerValue {
+                    batteryFound = true
+                }
+                if let current = info[kIOPSCurrentCapacityKey] as? Int,
+                   let max = info[kIOPSMaxCapacityKey] as? Int, max > 0 {
+                    currentCap = current
+                    maxCap = max
+                }
+            }
+        }
+        isOnBattery = batteryFound
+        batteryPercentage = maxCap > 0 ? Int((Double(currentCap) / Double(maxCap)) * 100) : 100
+    }
+}
+
 class WallpaperSettings: ObservableObject {
     @AppStorage("playlistData") var playlistData: Data = Data() {
         didSet { updatePlaylistTimer() }
@@ -43,7 +89,7 @@ class WallpaperSettings: ObservableObject {
     @AppStorage("isShuffle") var isShuffle: Bool = false
     
     @AppStorage("syncMenuBar") var syncMenuBar: Bool = true {
-        didSet { if syncMenuBar, let item = activeItems.last { syncNativeWallpaper(with: item) } }
+        didSet { if syncMenuBar { syncCurrentWallpaper() } }
     }
     
     @AppStorage("launchAtLogin") var launchAtLogin: Bool = false {
@@ -54,7 +100,7 @@ class WallpaperSettings: ObservableObject {
     private var playlistTimer: Timer?
     private var currentIndex: Int = 0
     private var syncTask: Task<Void, Never>?
-    private var useToggleSyncFile = false
+    private var transitionWorkItem: DispatchWorkItem?
     
     var validPlaylistPaths: [String] {
         return playlistPaths.filter { path in
@@ -78,6 +124,9 @@ class WallpaperSettings: ObservableObject {
         if let currentItem = activeItems.last, paths.contains(currentItem.url.path) {
             if let newIndex = paths.firstIndex(of: currentItem.url.path) {
                 currentIndex = newIndex
+            }
+            if syncMenuBar {
+                syncCurrentWallpaper()
             }
             return
         }
@@ -111,19 +160,29 @@ class WallpaperSettings: ObservableObject {
         
         if activeItems.last?.url.path == selectedPath { return }
         
+        transitionWorkItem?.cancel()
+        
+        // If there's an ongoing transition, immediately collapse to the most recent item
+        if activeItems.count > 1 {
+            activeItems = [activeItems.last!]
+        }
+        
         let newItem = PlaylistItem(url: URL(fileURLWithPath: selectedPath))
         
         withAnimation(.easeInOut(duration: 1.5)) {
             activeItems.append(newItem)
         }
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in
+        let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             if self.activeItems.count > 1 {
                 self.activeItems.removeFirst(self.activeItems.count - 1)
             }
             self.syncNativeWallpaper(with: newItem)
+            self.transitionWorkItem = nil
         }
+        transitionWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8, execute: workItem)
     }
     
     func nextPlaylistVideo() {
@@ -131,6 +190,8 @@ class WallpaperSettings: ObservableObject {
         guard paths.count > 1 else { return }
         
         DispatchQueue.main.async {
+            self.transitionWorkItem?.cancel()
+            
             if self.isShuffle {
                 var newIndex = Int.random(in: 0..<paths.count)
                 if newIndex == self.currentIndex {
@@ -141,18 +202,27 @@ class WallpaperSettings: ObservableObject {
                 self.currentIndex = (self.currentIndex + 1) % paths.count
             }
             
+            // If there's an ongoing transition, immediately collapse to the most recent item
+            if self.activeItems.count > 1 {
+                self.activeItems = [self.activeItems.last!]
+            }
+            
             let newItem = PlaylistItem(url: URL(fileURLWithPath: paths[self.currentIndex]))
             
             withAnimation(.easeInOut(duration: 1.5)) {
                 self.activeItems.append(newItem)
             }
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
                 if self.activeItems.count > 1 {
                     self.activeItems.removeFirst(self.activeItems.count - 1)
                 }
                 self.syncNativeWallpaper(with: newItem)
+                self.transitionWorkItem = nil
             }
+            self.transitionWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8, execute: workItem)
         }
     }
     
@@ -171,6 +241,16 @@ class WallpaperSettings: ObservableObject {
         image.draw(in: NSRect(origin: .zero, size: newSize), from: NSRect(origin: .zero, size: originalSize), operation: .copy, fraction: 1.0)
         newImage.unlockFocus()
         return newImage
+    }
+    
+    func syncCurrentWallpaper() {
+        guard syncMenuBar else { return }
+        if let item = activeItems.last {
+            syncNativeWallpaper(with: item)
+        } else if let firstValid = validPlaylistPaths.first {
+            let item = PlaylistItem(url: URL(fileURLWithPath: firstValid))
+            syncNativeWallpaper(with: item)
+        }
     }
     
     func syncNativeWallpaper(with item: PlaylistItem) {
@@ -219,19 +299,32 @@ class WallpaperSettings: ObservableObject {
             
             if Task.isCancelled { return }
             
-            // Alternate between two filenames to break macOS desktop image URL caching
-            let filename = useToggleSyncFile ? "pentra_sync_a.png" : "pentra_sync_b.png"
-            useToggleSyncFile.toggle()
+            // Alternating sync file in Application Support/coflyn.Pentra ensures macOS Dock detects changes
+            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
+            let syncDir = appSupport.appendingPathComponent("coflyn.Pentra", isDirectory: true)
+            try? FileManager.default.createDirectory(at: syncDir, withIntermediateDirectories: true)
             
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
-            try? FileManager.default.removeItem(at: tempURL)
+            let syncA = syncDir.appendingPathComponent("pentra_sync_a.png")
+            let syncB = syncDir.appendingPathComponent("pentra_sync_b.png")
+            
+            let currentURL = await MainActor.run {
+                NSScreen.main.flatMap { NSWorkspace.shared.desktopImageURL(for: $0) }
+            }
+            let targetURL = (currentURL?.lastPathComponent == "pentra_sync_a.png") ? syncB : syncA
             
             do {
-                try pngData.write(to: tempURL)
+                try pngData.write(to: targetURL)
                 if Task.isCancelled { return }
-                await MainActor.run {
-                    for screen in NSScreen.screens {
-                        try? NSWorkspace.shared.setDesktopImageURL(tempURL, for: screen, options: [:])
+                
+                // Perform setDesktopImageURL off the Main RunLoop so Dock IPC delays never beachball the UI
+                Task.detached(priority: .utility) {
+                    let screens = await MainActor.run { NSScreen.screens }
+                    let options: [NSWorkspace.DesktopImageOptionKey: Any] = [
+                        .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
+                        .allowClipping: true
+                    ]
+                    for screen in screens {
+                        try? NSWorkspace.shared.setDesktopImageURL(targetURL, for: screen, options: options)
                     }
                 }
             } catch {
@@ -263,26 +356,45 @@ let globalSettings = WallpaperSettings()
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var wallpaperWindows: [NSWindow] = []
     var settingsWindow: NSWindow?
+    private var screenChangeWorkItem: DispatchWorkItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupWallpaperWindow()
         setupSettingsWindow()
         globalSettings.syncLaunchAtLoginState()
         globalSettings.updatePlaylistTimer()
+        globalSettings.syncCurrentWallpaper()
         
-        // Listen for screen changes to recreate windows (registered once)
+        // Listen for screen changes with debounce to prevent window creation storms on wake
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.setupWallpaperWindow()
+            self?.screenChangeWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.setupWallpaperWindow()
+            }
+            self?.screenChangeWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: workItem)
         }
     }
     
     func setupWallpaperWindow() {
+        let screens = NSScreen.screens
+        
+        if wallpaperWindows.count == screens.count && !wallpaperWindows.isEmpty {
+            for (index, screen) in screens.enumerated() {
+                wallpaperWindows[index].setFrame(screen.frame, display: true)
+            }
+            return
+        }
+        
+        // Clean up previous windows and tear down their views
         for window in wallpaperWindows {
+            window.contentView = nil
+            window.orderOut(nil)
             window.close()
         }
         wallpaperWindows.removeAll()
         
-        for screen in NSScreen.screens {
+        for screen in screens {
             let window = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) - 1)
@@ -330,7 +442,10 @@ class PlayerNSView: NSView {
     let playerLayer = AVPlayerLayer()
     var batteryTimer: Timer?
     var pauseWorkItem: DispatchWorkItem?
+    var wakeWorkItem: DispatchWorkItem?
+    var occlusionWorkItem: DispatchWorkItem?
     var onWake: (() -> Void)?
+    private var isCleanedUp = false
     
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -339,7 +454,8 @@ class PlayerNSView: NSView {
         playerLayer.videoGravity = .resizeAspectFill
         self.layer?.addSublayer(playerLayer)
         
-        batteryTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+        batteryTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
+            PowerManager.shared.refreshIfNeeded(force: true)
             self?.evaluatePlayback()
         }
     }
@@ -347,15 +463,38 @@ class PlayerNSView: NSView {
     required init?(coder: NSCoder) { fatalError() }
     
     deinit {
+        cleanup()
+    }
+    
+    func cleanup() {
+        guard !isCleanedUp else { return }
+        isCleanedUp = true
+        
         batteryTimer?.invalidate()
         batteryTimer = nil
+        pauseWorkItem?.cancel()
+        pauseWorkItem = nil
+        wakeWorkItem?.cancel()
+        wakeWorkItem = nil
+        occlusionWorkItem?.cancel()
+        occlusionWorkItem = nil
+        
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        
+        if let player = playerLayer.player as? AVQueuePlayer {
+            player.pause()
+            player.removeAllItems()
+        }
+        playerLayer.player = nil
     }
     
     override func layout() {
         super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         playerLayer.frame = self.bounds
+        CATransaction.commit()
     }
     
     override func viewDidMoveToWindow() {
@@ -363,64 +502,66 @@ class PlayerNSView: NSView {
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         
-        if let window = self.window {
-            NotificationCenter.default.addObserver(self, selector: #selector(evaluatePlayback), name: NSWindow.didChangeOcclusionStateNotification, object: window)
-            NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(sleepMac), name: NSWorkspace.screensDidSleepNotification, object: nil)
-            NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(handleWake), name: NSWorkspace.screensDidWakeNotification, object: nil)
-            NotificationCenter.default.addObserver(self, selector: #selector(evaluatePlayback), name: NSNotification.Name.NSProcessInfoPowerStateDidChange, object: nil)
-        }
-    }
-    
-    func isOnBatteryPower() -> Bool {
-        guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-              let sources = IOPSCopyPowerSourcesList(snapshot)?.takeRetainedValue() as? [CFTypeRef] else { return false }
-        
-        for source in sources {
-            if let info = IOPSGetPowerSourceDescription(snapshot, source)?.takeUnretainedValue() as? [String: Any],
-               let state = info[kIOPSPowerSourceStateKey] as? String {
-                if state == kIOPSBatteryPowerValue {
-                    return true
-                }
-            }
-        }
-        return false
-    }
-    
-    func getBatteryPercentage() -> Int {
-        guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-              let sources = IOPSCopyPowerSourcesList(snapshot)?.takeRetainedValue() as? [CFTypeRef] else { return 100 }
-        
-        for source in sources {
-            if let info = IOPSGetPowerSourceDescription(snapshot, source)?.takeUnretainedValue() as? [String: Any],
-               let current = info[kIOPSCurrentCapacityKey] as? Int,
-               let max = info[kIOPSMaxCapacityKey] as? Int, max > 0 {
-                return Int((Double(current) / Double(max)) * 100)
-            }
-        }
-        return 100
-    }
-    
-    @objc func evaluatePlayback() {
-        guard let player = playerLayer.player as? AVQueuePlayer else { return }
-        
-        if globalSettings.isPaused {
-            player.pause()
+        guard let window = self.window else {
+            // View removed from window, pause to conserve resources
+            (playerLayer.player as? AVQueuePlayer)?.pause()
             return
         }
         
-        let onBattery = isOnBatteryPower()
-        let batteryPct = getBatteryPercentage()
+        NotificationCenter.default.addObserver(self, selector: #selector(handleOcclusionChange), name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        
+        // Handle both screen sleep/wake and system sleep/wake
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(sleepMac), name: NSWorkspace.screensDidSleepNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(handleWake), name: NSWorkspace.screensDidWakeNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(sleepMac), name: NSWorkspace.willSleepNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(handleWake), name: NSWorkspace.didWakeNotification, object: nil)
+        
+        NotificationCenter.default.addObserver(self, selector: #selector(handlePowerChange), name: NSNotification.Name.NSProcessInfoPowerStateDidChange, object: nil)
+    }
+    
+    @objc private func handlePowerChange() {
+        PowerManager.shared.refreshIfNeeded(force: true)
+        evaluatePlayback()
+    }
+    
+    @objc private func handleOcclusionChange() {
+        // Debounce occlusion change by 100ms so moving windows around doesn't rapidly bounce playback
+        occlusionWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.evaluatePlayback()
+        }
+        occlusionWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
+    }
+    
+    @objc func evaluatePlayback() {
+        guard let player = playerLayer.player as? AVQueuePlayer, !isCleanedUp else { return }
+        
+        if globalSettings.isPaused {
+            if player.timeControlStatus != .paused {
+                player.pause()
+            }
+            return
+        }
+        
+        PowerManager.shared.refreshIfNeeded()
+        let onBattery = PowerManager.shared.isOnBattery
+        let batteryPct = PowerManager.shared.batteryPercentage
         let lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
         
         if globalSettings.pauseBatteryThreshold > 0 && onBattery {
             if globalSettings.pauseBatteryThreshold == 100 || batteryPct <= globalSettings.pauseBatteryThreshold {
-                player.pause()
+                if player.timeControlStatus != .paused {
+                    player.pause()
+                }
                 return
             }
         }
         
         guard let window = self.window else {
-            player.play()
+            if player.timeControlStatus != .playing {
+                player.play()
+            }
             return
         }
         
@@ -428,21 +569,35 @@ class PlayerNSView: NSView {
             pauseWorkItem?.cancel()
             pauseWorkItem = nil
             
+            let targetRate: Float
             if globalSettings.smartPowerSaving && (lowPowerMode || onBattery) {
                 if lowPowerMode || batteryPct <= 20 {
-                    player.rate = Float(globalSettings.playbackSpeed) * 0.25
+                    targetRate = Float(globalSettings.playbackSpeed) * 0.25
                 } else if onBattery {
-                    player.rate = Float(globalSettings.playbackSpeed) * 0.5
+                    targetRate = Float(globalSettings.playbackSpeed) * 0.5
+                } else {
+                    targetRate = Float(globalSettings.playbackSpeed)
                 }
             } else {
-                player.rate = Float(globalSettings.playbackSpeed)
+                targetRate = Float(globalSettings.playbackSpeed)
             }
-            player.play()
+            
+            // Only update rate if it actually changed, avoiding timebase clock jitter
+            if abs(player.rate - targetRate) > 0.01 {
+                player.rate = targetRate
+            }
+            
+            // Only call play() if not already playing
+            if player.timeControlStatus != .playing {
+                player.play()
+            }
         } else {
             if pauseWorkItem == nil {
                 let workItem = DispatchWorkItem { [weak self, weak player] in
                     guard let self = self, let window = self.window, !window.occlusionState.contains(.visible) else { return }
-                    player?.pause()
+                    if player?.timeControlStatus != .paused {
+                        player?.pause()
+                    }
                     self.pauseWorkItem = nil
                 }
                 pauseWorkItem = workItem
@@ -452,18 +607,23 @@ class PlayerNSView: NSView {
     }
     
     @objc func sleepMac() {
+        pauseWorkItem?.cancel()
+        pauseWorkItem = nil
+        wakeWorkItem?.cancel()
+        wakeWorkItem = nil
         (playerLayer.player as? AVQueuePlayer)?.pause()
     }
     
     @objc func handleWake() {
-        onWake?()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self = self, let player = self.playerLayer.player as? AVQueuePlayer else { return }
-            if let item = player.currentItem, item.status == .readyToPlay {
-                player.seek(to: item.currentTime(), toleranceBefore: .zero, toleranceAfter: .zero)
-            }
+        wakeWorkItem?.cancel()
+        // Allow macOS WindowServer and Metal GPU context 0.8s to fully stabilize after wake
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self, !self.isCleanedUp else { return }
+            self.onWake?()
             self.evaluatePlayback()
         }
+        wakeWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: workItem)
     }
 }
 
@@ -507,12 +667,14 @@ struct LoopingPlayerView: NSViewRepresentable {
         view.playerLayer.player = player
         
         context.coordinator.playerLayer = view.playerLayer
-        play(url: url, player: player, context: context)
+        context.coordinator.currentURL = url
+        play(url: url, player: player, coordinator: context.coordinator)
         applySettings(to: player, layer: view.playerLayer, view: view)
         
-        view.onWake = {
-            if context.coordinator.currentURL != url || player.currentItem == nil {
-                play(url: url, player: player, context: context)
+        view.onWake = { [weak player, weak coordinator = context.coordinator] in
+            guard let player = player, let coordinator = coordinator, let currentURL = coordinator.currentURL else { return }
+            if player.currentItem == nil {
+                play(url: currentURL, player: player, coordinator: coordinator)
             }
         }
         
@@ -522,36 +684,66 @@ struct LoopingPlayerView: NSViewRepresentable {
     func updateNSView(_ nsView: PlayerNSView, context: Context) {
         if let player = nsView.playerLayer.player as? AVQueuePlayer {
             if context.coordinator.currentURL != url {
-                play(url: url, player: player, context: context)
+                context.coordinator.currentURL = url
+                play(url: url, player: player, coordinator: context.coordinator)
+            }
+            // Ensure onWake always references the currently active URL even when view is reused
+            nsView.onWake = { [weak player, weak coordinator = context.coordinator] in
+                guard let player = player, let coordinator = coordinator, let currentURL = coordinator.currentURL else { return }
+                if player.currentItem == nil {
+                    play(url: currentURL, player: player, coordinator: coordinator)
+                }
             }
             applySettings(to: player, layer: nsView.playerLayer, view: nsView)
         }
     }
     
+    static func dismantleNSView(_ nsView: PlayerNSView, coordinator: Coordinator) {
+        coordinator.loadTask?.cancel()
+        coordinator.loadTask = nil
+        coordinator.looper?.disableLooping()
+        coordinator.looper = nil
+        nsView.cleanup()
+    }
+    
     private func applySettings(to player: AVQueuePlayer, layer: AVPlayerLayer, view: PlayerNSView) {
-        player.volume = settings.isMuted ? 0.0 : Float(settings.volume)
-        player.defaultRate = Float(settings.playbackSpeed)
-        if player.rate != 0 {
-            player.rate = Float(settings.playbackSpeed)
+        let isMuted = settings.isMuted
+        if player.isMuted != isMuted {
+            player.isMuted = isMuted
+        }
+        let targetVolume = isMuted ? 0.0 : Float(settings.volume)
+        if abs(player.volume - targetVolume) > 0.01 {
+            player.volume = targetVolume
         }
         
+        let targetRate = Float(settings.playbackSpeed)
+        if abs(player.defaultRate - targetRate) > 0.01 {
+            player.defaultRate = targetRate
+        }
+        
+        let targetGravity: AVLayerVideoGravity
         switch settings.scaleMode {
-        case 1: layer.videoGravity = .resizeAspect
-        case 2: layer.videoGravity = .resize
-        default: layer.videoGravity = .resizeAspectFill
+        case 1: targetGravity = .resizeAspect
+        case 2: targetGravity = .resize
+        default: targetGravity = .resizeAspectFill
+        }
+        if layer.videoGravity != targetGravity {
+            layer.videoGravity = targetGravity
         }
         
         view.evaluatePlayback()
     }
     
-    private func play(url: URL, player: AVQueuePlayer, context: Context) {
-        context.coordinator.currentURL = url
-        context.coordinator.loadTask?.cancel()
+    private func play(url: URL, player: AVQueuePlayer, coordinator: Coordinator) {
+        coordinator.currentURL = url
+        coordinator.loadTask?.cancel()
         
-        context.coordinator.loadTask = Task {
-            context.coordinator.looper?.disableLooping()
-            player.removeAllItems()
-            
+        // Execute player item clearing on MainActor to avoid background data races
+        coordinator.looper?.disableLooping()
+        coordinator.looper = nil
+        player.removeAllItems()
+        
+        coordinator.loadTask = Task {
             let asset = AVURLAsset(url: url)
             var assetToPlay: AVAsset = asset
             
@@ -591,11 +783,11 @@ struct LoopingPlayerView: NSViewRepresentable {
             
             if Task.isCancelled { return }
             let item = AVPlayerItem(asset: assetToPlay)
-            player.preventsDisplaySleepDuringVideoPlayback = false
             
             await MainActor.run {
                 if Task.isCancelled { return }
-                context.coordinator.looper = AVPlayerLooper(player: player, templateItem: item)
+                player.preventsDisplaySleepDuringVideoPlayback = false
+                coordinator.looper = AVPlayerLooper(player: player, templateItem: item)
             }
         }
     }
@@ -606,6 +798,53 @@ struct LoopingPlayerView: NSViewRepresentable {
         var playerLayer: AVPlayerLayer?
         var currentURL: URL?
         var loadTask: Task<Void, Never>?
+    }
+}
+
+struct OptionalBlurModifier: ViewModifier {
+    let radius: Double
+    func body(content: Content) -> some View {
+        if radius > 0 {
+            content.blur(radius: radius)
+        } else {
+            content
+        }
+    }
+}
+
+struct StaticImageView: View {
+    let url: URL
+    let scaleMode: Int
+    @State private var image: NSImage?
+    
+    var body: some View {
+        Group {
+            if let image = image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: scaleMode == 1 ? .fit : .fill)
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                    .clipped()
+            } else {
+                Color.black
+            }
+        }
+        .onAppear {
+            loadImage()
+        }
+        .onChange(of: url) { _ in
+            loadImage()
+        }
+    }
+    
+    private func loadImage() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let img = NSImage(contentsOf: url) {
+                DispatchQueue.main.async {
+                    self.image = img
+                }
+            }
+        }
     }
 }
 
@@ -632,13 +871,7 @@ struct WallpaperView: View {
                     Group {
                         let ext = item.url.pathExtension.lowercased()
                         if ["jpg", "jpeg", "png", "heic", "webp"].contains(ext) {
-                            if let image = NSImage(contentsOf: item.url) {
-                                Image(nsImage: image)
-                                    .resizable()
-                                    .aspectRatio(contentMode: settings.scaleMode == 1 ? .fit : .fill)
-                                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
-                                    .clipped()
-                            } else { Color.black }
+                            StaticImageView(url: item.url, scaleMode: settings.scaleMode)
                         } else if ext == "gif" {
                             GIFPlayerView(url: item.url)
                         } else {
@@ -648,7 +881,7 @@ struct WallpaperView: View {
                     .transition(.opacity)
                     .edgesIgnoringSafeArea(.all)
                 }
-                .blur(radius: settings.blurRadius)
+                .modifier(OptionalBlurModifier(radius: settings.blurRadius))
                 
                 // Brightness Overlay
                 Color.black
