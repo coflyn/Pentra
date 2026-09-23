@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.55"
+        android:scaleY="0.55"
+        android:pivotX="54"
+        android:pivotY="54">
+        <!-- Amber "P" lettermark — amber accent #E8C96D on dark background -->
+        <path
+            android:fillColor="#E8C96D"
+            android:pathData="M30,20 L30,88 L44,88 L44,62 L62,62 C74,62 82,54 82,44 C82,30 74,20 62,20 Z
+                              M44,34 L60,34 C66,34 68,38 68,44 C68,50 66,50 60,50 L44,50 Z" />
+    </group>
+</vector>

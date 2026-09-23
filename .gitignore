@@ -41,7 +41,23 @@ playground.xcworkspace
 
 # Mac OS
 .DS_Store
+**/.DS_Store
+
+# Android & Gradle
+.gradle/
+build/
+**/build/
+*.apk
+*.aab
+local.properties
+.cxx/
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
 
 # Test Directories
 PentraTests/
 PentraUITests/
+.agents/
+AGENTS.md

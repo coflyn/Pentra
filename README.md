@@ -1,14 +1,16 @@
 # Pentra Live Wallpaper
 
-![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg?style=flat)
-![macOS](https://img.shields.io/badge/macOS-13.0+-black.svg?style=flat&logo=apple)
-![Framework](https://img.shields.io/badge/Framework-SwiftUI-blue.svg?style=flat)
+![Platforms](https://img.shields.io/badge/Platforms-macOS%20%7C%20Android-black.svg?style=flat)
+![Swift](https://img.shields.io/badge/macOS-Swift%205.9%20%2F%20SwiftUI-orange.svg?style=flat&logo=apple)
+![Kotlin](https://img.shields.io/badge/Android-Kotlin%202.0%20%2F%20Compose-green.svg?style=flat&logo=android)
 ![Version](https://img.shields.io/badge/Version-1.2.0-blue.svg?style=flat)
 ![License](https://img.shields.io/badge/License-GPLv3-blue.svg?style=flat)
 
-Pentra is a lightweight, high-performance Live Wallpaper engine for macOS built natively with Swift, SwiftUI, and AppKit. It allows you to set any MP4/MOV video, animated GIF, or static image as your desktop background without sacrificing system performance.
+Pentra is a lightweight, high-performance Live Wallpaper engine for macOS and Android. It allows you to set video wallpapers, animated loops, or playlists as your desktop or mobile background without sacrificing battery or system performance.
 
-## Features
+---
+
+## macOS Features
 
 - **Native & Lightweight:** Built directly on top of macOS APIs (`NSWindow` and `AVFoundation`) for a minimal memory footprint (~60MB RAM).
 - **Universal Media Engine:** Seamlessly supports Videos (MP4, MOV, M4V, 3GP), Animated GIFs, and High-Res Images (JPG, PNG, WebP, HEIC).
@@ -25,46 +27,49 @@ Pentra is a lightweight, high-performance Live Wallpaper engine for macOS built 
 - **Cinematic Controls:** Adjust playback speed (0.5x to 2.0x), apply real-time Gaussian Blur, tweak brightness, and control volume.
 - **Start at Login:** Automatically launches quietly in the background when you start your Mac.
 
+---
+
+## Android Features (PentraAndroid)
+
+- **Native Android Live Wallpaper Service:** Powered by Media3 ExoPlayer with hardware-accelerated video decoding (`VideoWallpaperService`).
+- **Modern Jetpack Compose UI:** Premium dark-themed interface built with Material 3.
+- **Aspect Ratio Preservation:** Native 9:16 vertical previews and fill-with-crop live wallpaper scaling to prevent video stretching or distortion.
+- **Auto-Cycle Rotation & Shuffle:** Set rotation intervals (1 min, 5 min, 15 min, 30 min, 1 hr, or Never) with random shuffle mode. Deep-sleep elapsed time checks guarantee timely wallpaper changes upon waking.
+- **Live Wallpaper Preview Sheet:** Interactive bottom sheet with real-time effects preview (speed, volume, blur radius, brightness, battery threshold).
+- **Quick Settings Tile:** Toggle wallpaper playback directly from your Android notification/quick settings panel.
+- **Power Saver:** Automatically pauses live wallpaper when battery drops below your chosen threshold.
+- **Matching Visual Identity:** Native adaptive icons and round icons matching the original macOS Pentra icon.
+
+---
+
 ## Project Structure
 
 ```text
 Pentra/
-├── Pentra.xcodeproj/              # Xcode Project Configuration
-├── Pentra/                        # Source Code
-│   ├── PentraApp.swift            # Main Engine, Window Layering, & Menu Bar Controls
+├── Pentra/                        # macOS Application Source
+│   ├── PentraApp.swift            # macOS Main Engine, Window Layering, & Menu Bar Controls
 │   ├── ContentView.swift          # SwiftUI Settings Interface & Visual Playlist Manager
-│   └── Assets.xcassets/           # App Icons & Asset Catalog
+│   └── Assets.xcassets/           # macOS App Icons & Asset Catalog
+├── PentraAndroid/                 # Android Application Source
+│   ├── app/src/main/
+│   │   ├── kotlin/com/pentra/android/
+│   │   │   ├── VideoWallpaperService.kt # Android Live Wallpaper Engine (ExoPlayer)
+│   │   │   ├── QuickTileService.kt      # Quick Settings Tile
+│   │   │   ├── WallpaperPrefs.kt        # SharedPreferences Store
+│   │   │   └── ui/                      # Jetpack Compose UI & ViewModel
+│   │   └── res/                         # Android Drawables, Mipmaps & Icons
+│   ├── build.gradle.kts           # Gradle Build Config
+│   └── settings.gradle.kts
 ├── README.md                      # Documentation & Release Notes
 ├── LICENSE                        # GNU General Public License v3.0 (GPLv3)
 └── .gitignore                     # Git Ignore Rules
 ```
 
-## What's New in v1.2.0
+---
 
-- **Menu Bar Quick Controls:** Added a quick-access dropdown in the macOS Menu Bar featuring the currently playing title ("Now Playing: <name>"), instant Play/Pause toggle, Next Wallpaper button, and Mute/Unmute audio control.
-- **Shuffle Playlist Mode:** Introduced a "Shuffle Playlist" toggle in settings to randomly cycle through playlist wallpapers rather than strictly sequential order.
-- **Drag & Drop File Import:** Enabled native `.onDrop` support on the Wallpaper Source card, allowing users to drag video and image files directly from Finder into Pentra.
-- **Unrestricted Manual Next Wallpaper:** Refactored manual wallpaper cycling (`nextPlaylistVideo()`) to allow instant manual switching even when the auto-rotation timer is set to "Never".
-- **Interactive Thumbnail Selection:** Click any wallpaper thumbnail in the Settings window to instantly activate and play it, highlighted by a real-time blue stroke and checkmark badge indicator.
-- **"Never" Auto-Cycle Option:** Added a "Never" option to the playlist timer dropdown, allowing users to keep a single active wallpaper playing without automatic rotation.
-- **macOS Menu Bar Cache Bypass:** Implemented alternating temporary file rotation (`pentra_sync_a.png` & `pentra_sync_b.png`) to break `NSWorkspace` URL caching, ensuring instant Menu Bar color and translucency updates when switching wallpapers.
-- **Dynamic 4K Native Support:** Upgraded Menu Bar wallpaper sync to dynamically match target screen resolutions up to **4K (3840x2160)** for ultra-crisp Menu Bar aesthetics on 4K/Retina displays.
-- **RAM Spike Prevention:** Introduced GPU-friendly bitmap downscaling for high-resolution static images (JPG, PNG, HEIC, GIF), eliminating uncompressed TIFF memory spikes.
-- **Sync Task Cancellation Token:** Added strict `Task` cancellation handling (`syncTask?.cancel()`) to prevent I/O file write collisions during rapid playlist switches.
-- **Strict Format Validation:** Restricted `NSOpenPanel` file picker to natively supported AVFoundation containers (`MP4`, `MOV`, `M4V`, `3GP`) and image formats (`JPG`, `PNG`, `HEIC`, `WEBP`, `GIF`), explicitly disallowing unsupported containers like `.mkv` and `.webm`.
-- **Automatic Dead Path Filter:** Added `validPlaylistPaths` validation via `FileManager` to automatically skip deleted files or unmounted external drives without black screen freezes.
+## Installation & Building
 
-## Previous Updates in v1.1.0
-
-- **Zero-Leak Engine Architecture:** Fixed strong reference cycles in `PlayerNSView` timer loops and observers, completely eliminating RAM leaks during playlist cycling and display configuration changes.
-- **Instant Sleep/Wake Recovery:** Restructured wake handlers to preserve `AVPlayerItem` status and seek gracefully without destroying looper instances, eliminating black screen delays when waking from sleep.
-- **Disk Footprint Optimization:** Optimized native wallpaper sync to use a single fixed temporary image file, preventing `/tmp` file accumulation.
-- **Task Cancellation & Anti-Race Engine:** Added strict task cancellation tokens (`loadTask?.cancel()`) to prevent out-of-order video loading when changing playlist items rapidly.
-- **Accurate Power Detection:** Upgraded battery status check to read `kIOPSPowerSourceStateKey` directly from `IOKit`, fixing false AC power reporting while estimating battery life.
-- **Safe UI Playlist Operations:** Updated playlist deletion logic to remove items by path reference, preventing out-of-bounds array exceptions.
-
-## Installation & Gatekeeper Fix
-
+### macOS
 1. Download **[Pentra.dmg](Pentra.dmg)** from this repository.
 2. Open the `.dmg` file and drag **Pentra.app** into your `/Applications` folder.
 
@@ -77,16 +82,21 @@ Pentra/
 > sudo xattr -cr /Applications/Pentra.app
 > ```
 
+### Android
+Build debug APK with Gradle:
+```bash
+cd PentraAndroid
+./gradlew assembleDebug
+```
+The compiled APK will be generated at:
+`PentraAndroid/app/build/outputs/apk/debug/app-debug.apk`
+
+---
+
 ## Requirements
 
-- macOS 13.0 (Ventura) or later.
-- Xcode 15+ (for building).
-
-## Built With
-
-- Swift & SwiftUI (User Interface)
-- AppKit (Window Layering & Occlusion Detection)
-- AVKit / AVFoundation (Video Rendering Engine)
+- **macOS:** macOS 13.0 (Ventura) or later, Xcode 15+ (for building).
+- **Android:** Android 8.0 (API 26) or later, JDK 17+ (for building).
 
 ## License
 
