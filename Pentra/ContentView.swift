@@ -413,6 +413,8 @@ struct ContentView: View {
                         Divider()
                         ToggleRow(icon: "leaf", title: "Smart Power Saving", isOn: $settings.smartPowerSaving)
                         Divider()
+                        ToggleRow(icon: "display", title: "Keep Display Awake", isOn: $settings.keepAwake)
+                        Divider()
                         ToggleRow(icon: "power", title: "Start at Login", isOn: Binding(
                             get: { settings.launchAtLogin },
                             set: { newValue in

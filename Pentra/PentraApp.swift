@@ -2,10 +2,42 @@ import SwiftUI
 import AVKit
 import ServiceManagement
 import IOKit.ps
+import IOKit.pwr_mgt
 
 struct PlaylistItem: Identifiable, Equatable {
     let id = UUID()
     let url: URL
+}
+
+final class DisplaySleepPreventer {
+    static let shared = DisplaySleepPreventer()
+    private var assertionID: IOPMAssertionID = 0
+    private var voteCount: Int = 0
+    private let lock = NSLock()
+
+    private init() {}
+
+    func vote(playing: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        voteCount += playing ? 1 : -1
+        voteCount = max(0, voteCount)
+        if voteCount > 0 && assertionID == 0 {
+            IOPMAssertionCreateWithName(
+                kIOPMAssertionTypeNoDisplaySleep as CFString,
+                IOPMAssertionLevel(kIOPMAssertionLevelOn),
+                "Pentra live wallpaper playing" as CFString,
+                &assertionID
+            )
+        } else if voteCount == 0 && assertionID != 0 {
+            IOPMAssertionRelease(assertionID)
+            assertionID = 0
+        }
+    }
+}
+
+extension Notification.Name {
+    static let pentraKeepAwakeChanged = Notification.Name("pentraKeepAwakeChanged")
 }
 
 final class PowerManager {
@@ -87,6 +119,12 @@ class WallpaperSettings: ObservableObject {
     @AppStorage("smartPowerSaving") var smartPowerSaving: Bool = false
     @AppStorage("blurRadius") var blurRadius: Double = 0.0
     @AppStorage("isShuffle") var isShuffle: Bool = false
+    @AppStorage("keepAwake") var keepAwake: Bool = true {
+        didSet {
+            // Re-evaluate all PlayerNSView instances so the assertion is acquired/released immediately
+            NotificationCenter.default.post(name: .pentraKeepAwakeChanged, object: nil)
+        }
+    }
     
     @AppStorage("syncMenuBar") var syncMenuBar: Bool = true {
         didSet { if syncMenuBar { syncCurrentWallpaper() } }
@@ -378,34 +416,48 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     
     func setupWallpaperWindow() {
         let screens = NSScreen.screens
-        
+        guard !screens.isEmpty else { return }
+
+        // Reuse existing windows where possible to avoid the black-flash caused by
+        // tearing down and recreating windows during screen parameter changes.
         if wallpaperWindows.count == screens.count && !wallpaperWindows.isEmpty {
             for (index, screen) in screens.enumerated() {
                 wallpaperWindows[index].setFrame(screen.frame, display: true)
             }
             return
         }
-        
-        // Clean up previous windows and tear down their views
-        for window in wallpaperWindows {
-            window.contentView = nil
-            window.orderOut(nil)
-            window.close()
+
+        let level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) - 1)
+
+        if screens.count > wallpaperWindows.count {
+            // Add windows for new screens
+            for i in wallpaperWindows.count..<screens.count {
+                let screen = screens[i]
+                let window = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.level = level
+                window.ignoresMouseEvents = true
+                window.collectionBehavior = [.stationary, .canJoinAllSpaces, .ignoresCycle]
+                window.backgroundColor = .black
+                let hostingView = NSHostingView(rootView: WallpaperView().environmentObject(globalSettings))
+                window.contentView = hostingView
+                window.orderBack(nil)
+                wallpaperWindows.append(window)
+            }
+        } else {
+            // Remove surplus windows for disconnected screens
+            let surplus = wallpaperWindows.suffix(from: screens.count)
+            for window in surplus {
+                window.contentView = nil
+                window.orderOut(nil)
+                window.close()
+            }
+            wallpaperWindows.removeLast(wallpaperWindows.count - screens.count)
         }
-        wallpaperWindows.removeAll()
-        
-        for screen in screens {
-            let window = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) - 1)
-            window.ignoresMouseEvents = true
-            window.collectionBehavior = [.stationary, .canJoinAllSpaces, .ignoresCycle]
-            window.backgroundColor = .black
-            
-            let hostingView = NSHostingView(rootView: WallpaperView().environmentObject(globalSettings))
-            window.contentView = hostingView
-            window.orderBack(nil)
-            wallpaperWindows.append(window)
+
+        // Update frames for all retained windows
+        for (index, screen) in screens.enumerated() {
+            wallpaperWindows[index].setFrame(screen.frame, display: true)
         }
     }
     
@@ -446,6 +498,14 @@ class PlayerNSView: NSView {
     var occlusionWorkItem: DispatchWorkItem?
     var onWake: (() -> Void)?
     private var isCleanedUp = false
+    private var isVotingPlaying = false
+
+    private func setDisplaySleepVote(_ playing: Bool) {
+        let effective = playing && globalSettings.keepAwake
+        guard effective != isVotingPlaying else { return }
+        isVotingPlaying = effective
+        DisplaySleepPreventer.shared.vote(playing: effective)
+    }
     
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -469,6 +529,7 @@ class PlayerNSView: NSView {
     func cleanup() {
         guard !isCleanedUp else { return }
         isCleanedUp = true
+        setDisplaySleepVote(false)
         
         batteryTimer?.invalidate()
         batteryTimer = nil
@@ -509,14 +570,25 @@ class PlayerNSView: NSView {
         }
         
         NotificationCenter.default.addObserver(self, selector: #selector(handleOcclusionChange), name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        NotificationCenter.default.addObserver(self, selector: #selector(evaluatePlayback), name: .pentraKeepAwakeChanged, object: nil)
         
-        // Handle both screen sleep/wake and system sleep/wake
+        // Handle screen sleep/wake, system sleep/wake, and session unlock
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(sleepMac), name: NSWorkspace.screensDidSleepNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(handleWake), name: NSWorkspace.screensDidWakeNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(sleepMac), name: NSWorkspace.willSleepNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(handleWake), name: NSWorkspace.didWakeNotification, object: nil)
-        
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(handleWake), name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
+
+        NotificationCenter.default.addObserver(self, selector: #selector(handlePlaybackStall), name: AVPlayerItem.playbackStalledNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(handlePlaybackStall), name: AVPlayerItem.failedToPlayToEndTimeNotification, object: nil)
+
         NotificationCenter.default.addObserver(self, selector: #selector(handlePowerChange), name: NSNotification.Name.NSProcessInfoPowerStateDidChange, object: nil)
+    }
+
+    @objc private func handlePlaybackStall() {
+        guard !isCleanedUp else { return }
+        onWake?()
+        evaluatePlayback()
     }
     
     @objc private func handlePowerChange() {
@@ -541,6 +613,7 @@ class PlayerNSView: NSView {
             if player.timeControlStatus != .paused {
                 player.pause()
             }
+            setDisplaySleepVote(false)
             return
         }
         
@@ -554,6 +627,7 @@ class PlayerNSView: NSView {
                 if player.timeControlStatus != .paused {
                     player.pause()
                 }
+                setDisplaySleepVote(false)
                 return
             }
         }
@@ -568,29 +642,17 @@ class PlayerNSView: NSView {
         if window.occlusionState.contains(.visible) {
             pauseWorkItem?.cancel()
             pauseWorkItem = nil
-            
-            let targetRate: Float
-            if globalSettings.smartPowerSaving && (lowPowerMode || onBattery) {
-                if lowPowerMode || batteryPct <= 20 {
-                    targetRate = Float(globalSettings.playbackSpeed) * 0.25
-                } else if onBattery {
-                    targetRate = Float(globalSettings.playbackSpeed) * 0.5
-                } else {
-                    targetRate = Float(globalSettings.playbackSpeed)
-                }
-            } else {
-                targetRate = Float(globalSettings.playbackSpeed)
-            }
-            
-            // Only update rate if it actually changed, avoiding timebase clock jitter
+
+            let targetRate = Float(globalSettings.playbackSpeed)
+
             if abs(player.rate - targetRate) > 0.01 {
                 player.rate = targetRate
             }
-            
-            // Only call play() if not already playing
+
             if player.timeControlStatus != .playing {
                 player.play()
             }
+            setDisplaySleepVote(true)
         } else {
             if pauseWorkItem == nil {
                 let workItem = DispatchWorkItem { [weak self, weak player] in
@@ -598,6 +660,7 @@ class PlayerNSView: NSView {
                     if player?.timeControlStatus != .paused {
                         player?.pause()
                     }
+                    self.setDisplaySleepVote(false)
                     self.pauseWorkItem = nil
                 }
                 pauseWorkItem = workItem
@@ -611,6 +674,7 @@ class PlayerNSView: NSView {
         pauseWorkItem = nil
         wakeWorkItem?.cancel()
         wakeWorkItem = nil
+        setDisplaySleepVote(false)
         (playerLayer.player as? AVQueuePlayer)?.pause()
     }
     
@@ -668,13 +732,22 @@ struct LoopingPlayerView: NSViewRepresentable {
         
         context.coordinator.playerLayer = view.playerLayer
         context.coordinator.currentURL = url
-        play(url: url, player: player, coordinator: context.coordinator)
+        play(url: url, player: player, coordinator: context.coordinator, playerView: view)
         applySettings(to: player, layer: view.playerLayer, view: view)
         
-        view.onWake = { [weak player, weak coordinator = context.coordinator] in
+        view.onWake = { [weak view, weak player, weak coordinator = context.coordinator] in
             guard let player = player, let coordinator = coordinator, let currentURL = coordinator.currentURL else { return }
-            if player.currentItem == nil {
-                play(url: currentURL, player: player, coordinator: coordinator)
+            let isUnhealthy = player.currentItem == nil
+                || player.items().isEmpty
+                || player.status == .failed
+                || player.currentItem?.status == .failed
+                || coordinator.looper?.status == .failed
+                || player.error != nil
+
+            if isUnhealthy {
+                play(url: currentURL, player: player, coordinator: coordinator, playerView: view)
+            } else if player.timeControlStatus != .playing && !globalSettings.isPaused {
+                player.play()
             }
         }
         
@@ -685,13 +758,22 @@ struct LoopingPlayerView: NSViewRepresentable {
         if let player = nsView.playerLayer.player as? AVQueuePlayer {
             if context.coordinator.currentURL != url {
                 context.coordinator.currentURL = url
-                play(url: url, player: player, coordinator: context.coordinator)
+                play(url: url, player: player, coordinator: context.coordinator, playerView: nsView)
             }
-            // Ensure onWake always references the currently active URL even when view is reused
-            nsView.onWake = { [weak player, weak coordinator = context.coordinator] in
+            // Ensure onWake always references the currently active URL and recovers unhealthy looper/items
+            nsView.onWake = { [weak nsView, weak player, weak coordinator = context.coordinator] in
                 guard let player = player, let coordinator = coordinator, let currentURL = coordinator.currentURL else { return }
-                if player.currentItem == nil {
-                    play(url: currentURL, player: player, coordinator: coordinator)
+                let isUnhealthy = player.currentItem == nil
+                    || player.items().isEmpty
+                    || player.status == .failed
+                    || player.currentItem?.status == .failed
+                    || coordinator.looper?.status == .failed
+                    || player.error != nil
+
+                if isUnhealthy {
+                    play(url: currentURL, player: player, coordinator: coordinator, playerView: nsView)
+                } else if player.timeControlStatus != .playing && !globalSettings.isPaused {
+                    player.play()
                 }
             }
             applySettings(to: player, layer: nsView.playerLayer, view: nsView)
@@ -730,11 +812,34 @@ struct LoopingPlayerView: NSViewRepresentable {
         if layer.videoGravity != targetGravity {
             layer.videoGravity = targetGravity
         }
-        
+
+        // Resolution throttle: reduce GPU decode workload on battery without affecting playback speed
+        let maxRes: CGSize
+        if settings.smartPowerSaving {
+            PowerManager.shared.refreshIfNeeded()
+            let onBattery = PowerManager.shared.isOnBattery
+            let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+            let batteryPct = PowerManager.shared.batteryPercentage
+            if lowPower || batteryPct <= 20 {
+                maxRes = CGSize(width: 854, height: 480)   // 480p
+            } else if onBattery {
+                maxRes = CGSize(width: 1280, height: 720)  // 720p
+            } else {
+                maxRes = .zero                              // unlimited
+            }
+        } else {
+            maxRes = .zero
+        }
+        for item in player.items() {
+            if item.preferredMaximumResolution != maxRes {
+                item.preferredMaximumResolution = maxRes
+            }
+        }
+
         view.evaluatePlayback()
     }
     
-    private func play(url: URL, player: AVQueuePlayer, coordinator: Coordinator) {
+    private func play(url: URL, player: AVQueuePlayer, coordinator: Coordinator, playerView: PlayerNSView? = nil) {
         coordinator.currentURL = url
         coordinator.loadTask?.cancel()
         
@@ -786,8 +891,19 @@ struct LoopingPlayerView: NSViewRepresentable {
             
             await MainActor.run {
                 if Task.isCancelled { return }
+                if globalSettings.smartPowerSaving {
+                    PowerManager.shared.refreshIfNeeded()
+                    let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+                    let batteryPct = PowerManager.shared.batteryPercentage
+                    if lowPower || batteryPct <= 20 {
+                        item.preferredMaximumResolution = CGSize(width: 854, height: 480)
+                    } else if PowerManager.shared.isOnBattery {
+                        item.preferredMaximumResolution = CGSize(width: 1280, height: 720)
+                    }
+                }
                 player.preventsDisplaySleepDuringVideoPlayback = false
                 coordinator.looper = AVPlayerLooper(player: player, templateItem: item)
+                playerView?.evaluatePlayback()
             }
         }
     }
@@ -883,11 +999,13 @@ struct WallpaperView: View {
                 }
                 .modifier(OptionalBlurModifier(radius: settings.blurRadius))
                 
-                // Brightness Overlay
-                Color.black
-                    .opacity(1.0 - settings.brightness)
-                    .edgesIgnoringSafeArea(.all)
-                    .allowsHitTesting(false)
+                // Brightness overlay — skipped entirely when brightness is at max
+                if settings.brightness < 1.0 {
+                    Color.black
+                        .opacity(1.0 - settings.brightness)
+                        .edgesIgnoringSafeArea(.all)
+                        .allowsHitTesting(false)
+                }
             }
         }
     }
