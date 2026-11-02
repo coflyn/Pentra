@@ -1,17 +1,13 @@
 package com.pentra.android.ui
 
 import android.app.Application
-import android.app.WallpaperManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.pentra.android.VideoWallpaperService
 import com.pentra.android.WallpaperPrefs
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,8 +17,6 @@ import kotlinx.coroutines.launch
 data class PlaylistUiState(
     val playlist: List<String> = emptyList(),
     val activePath: String = "",
-    val shuffle: Boolean = false,
-    val intervalMinutes: Int = 0,
     val playbackSpeed: Float = 1.0f,
     val volume: Float = 0.0f,
     val blurRadius: Float = 0.0f,
@@ -39,8 +33,6 @@ class PlaylistViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(PlaylistUiState())
     val state: StateFlow<PlaylistUiState> = _state.asStateFlow()
 
-    private var inAppRotationJob: Job? = null
-
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
             WallpaperPrefs.KEY_ACTIVE_PATH -> {
@@ -50,16 +42,6 @@ class PlaylistViewModel(app: Application) : AndroidViewModel(app) {
             WallpaperPrefs.KEY_PLAYLIST -> {
                 val list = WallpaperPrefs.getPlaylist(ctx)
                 _state.update { it.copy(playlist = list) }
-                scheduleInAppRotation()
-            }
-            WallpaperPrefs.KEY_SHUFFLE -> {
-                val shuffle = WallpaperPrefs.getShuffle(ctx)
-                _state.update { it.copy(shuffle = shuffle) }
-            }
-            WallpaperPrefs.KEY_INTERVAL_MINUTES -> {
-                val interval = WallpaperPrefs.getIntervalMinutes(ctx)
-                _state.update { it.copy(intervalMinutes = interval) }
-                scheduleInAppRotation()
             }
             WallpaperPrefs.KEY_PLAYBACK_SPEED -> {
                 _state.update { it.copy(playbackSpeed = WallpaperPrefs.getPlaybackSpeed(ctx)) }
@@ -86,7 +68,6 @@ class PlaylistViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         WallpaperPrefs.prefs(ctx).unregisterOnSharedPreferenceChangeListener(prefsListener)
-        inAppRotationJob?.cancel()
         super.onCleared()
     }
 
@@ -98,8 +79,6 @@ class PlaylistViewModel(app: Application) : AndroidViewModel(app) {
                     PlaylistUiState(
                         playlist = WallpaperPrefs.getPlaylist(ctx),
                         activePath = WallpaperPrefs.getActivePath(ctx),
-                        shuffle = WallpaperPrefs.getShuffle(ctx),
-                        intervalMinutes = WallpaperPrefs.getIntervalMinutes(ctx),
                         playbackSpeed = WallpaperPrefs.getPlaybackSpeed(ctx),
                         volume = WallpaperPrefs.getVolume(ctx),
                         blurRadius = WallpaperPrefs.getBlurRadius(ctx),
@@ -108,7 +87,6 @@ class PlaylistViewModel(app: Application) : AndroidViewModel(app) {
                         isLoading = false
                     )
                 }
-                scheduleInAppRotation()
             } catch (e: Exception) {
                 _state.update { it.copy(isLoading = false, error = "Failed to load playlist") }
             }
@@ -123,7 +101,7 @@ class PlaylistViewModel(app: Application) : AndroidViewModel(app) {
                 ctx.contentResolver.takePersistableUriPermission(
                     uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
-            } catch (_: SecurityException) {
+            } catch (_: Exception) {
                 // file:// or non-persistable URIs — no action needed
             }
         }
@@ -134,7 +112,6 @@ class PlaylistViewModel(app: Application) : AndroidViewModel(app) {
             setActive(updated.first())
         }
         _state.update { it.copy(playlist = updated) }
-        scheduleInAppRotation()
     }
 
     fun removeItem(path: String) {
@@ -145,61 +122,11 @@ class PlaylistViewModel(app: Application) : AndroidViewModel(app) {
             WallpaperPrefs.setActivePath(ctx, next)
         }
         _state.update { it.copy(playlist = updated) }
-        scheduleInAppRotation()
     }
 
     fun setActive(path: String) {
         WallpaperPrefs.setActivePath(ctx, path)
         _state.update { it.copy(activePath = path) }
-    }
-
-    fun setShuffle(enabled: Boolean) {
-        WallpaperPrefs.setShuffle(ctx, enabled)
-        _state.update { it.copy(shuffle = enabled) }
-        if (enabled && _state.value.playlist.size > 1) {
-            rotateToNext(forceShuffle = true)
-        }
-    }
-
-    fun rotateToNext(forceShuffle: Boolean = false) {
-        val playlist = _state.value.playlist
-        if (playlist.size < 2) return
-        val current = _state.value.activePath
-        val currentIndex = playlist.indexOf(current)
-        val useShuffle = forceShuffle || _state.value.shuffle
-
-        val nextIndex = if (useShuffle) {
-            var idx: Int
-            do {
-                idx = playlist.indices.random()
-            } while (idx == currentIndex && playlist.size > 1)
-            idx
-        } else {
-            if (currentIndex >= 0) (currentIndex + 1) % playlist.size else 0
-        }
-        setActive(playlist[nextIndex])
-    }
-
-    private fun scheduleInAppRotation() {
-        inAppRotationJob?.cancel()
-        val minutes = _state.value.intervalMinutes
-        if (minutes <= 0 || _state.value.playlist.size < 2) return
-
-        val wm = ctx.getSystemService(Context.WALLPAPER_SERVICE) as? WallpaperManager
-        val isServiceActive = wm?.wallpaperInfo?.serviceName == VideoWallpaperService::class.java.name
-        if (isServiceActive) return
-
-        inAppRotationJob = viewModelScope.launch {
-            delay(minutes * 60_000L)
-            rotateToNext()
-            scheduleInAppRotation()
-        }
-    }
-
-    fun setInterval(minutes: Int) {
-        WallpaperPrefs.setIntervalMinutes(ctx, minutes)
-        _state.update { it.copy(intervalMinutes = minutes) }
-        scheduleInAppRotation()
     }
 
     fun setPlaybackSpeed(speed: Float) {

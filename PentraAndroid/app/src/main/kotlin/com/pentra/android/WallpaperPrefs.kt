@@ -11,8 +11,6 @@ object WallpaperPrefs {
 
     const val KEY_ACTIVE_PATH = "active_path"
     const val KEY_PLAYLIST = "playlist_paths"
-    const val KEY_SHUFFLE = "shuffle"
-    const val KEY_INTERVAL_MINUTES = "interval_minutes"
     const val KEY_BATTERY_THRESHOLD = "battery_threshold"
     const val KEY_PLAYBACK_SPEED = "playback_speed"
     const val KEY_VOLUME = "volume"
@@ -43,20 +41,6 @@ object WallpaperPrefs {
         prefs(context).edit()
             .putString(KEY_PLAYLIST, Json.encodeToString(paths))
             .apply()
-    }
-
-    fun getShuffle(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_SHUFFLE, false)
-
-    fun setShuffle(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_SHUFFLE, enabled).apply()
-    }
-
-    fun getIntervalMinutes(context: Context): Int =
-        prefs(context).getInt(KEY_INTERVAL_MINUTES, 0)
-
-    fun setIntervalMinutes(context: Context, minutes: Int) {
-        prefs(context).edit().putInt(KEY_INTERVAL_MINUTES, minutes).apply()
     }
 
     fun getBatteryThreshold(context: Context): Int =

@@ -64,10 +64,6 @@ fun PlaylistScreen(vm: PlaylistViewModel = viewModel()) {
         },
         topBar = {
             PentraTopBar(
-                shuffle = state.shuffle,
-                intervalMinutes = state.intervalMinutes,
-                onShuffleToggle = { vm.setShuffle(!state.shuffle) },
-                onIntervalChange = { vm.setInterval(it) },
                 onSettingsClick = { showSettings = true }
             )
         }
@@ -243,16 +239,8 @@ private fun WallpaperTile(
 
 @Composable
 private fun PentraTopBar(
-    shuffle: Boolean,
-    intervalMinutes: Int,
-    onShuffleToggle: () -> Unit,
-    onIntervalChange: (Int) -> Unit,
     onSettingsClick: () -> Unit
 ) {
-    var showIntervalMenu by remember { mutableStateOf(false) }
-    val intervals = listOf(0 to "Never", 1 to "1 min", 5 to "5 min", 15 to "15 min", 30 to "30 min", 60 to "1 hr")
-    val currentLabel = intervals.firstOrNull { it.first == intervalMinutes }?.second ?: "Never"
-
     Surface(color = Background, shadowElevation = 0.dp) {
         Row(
             Modifier
@@ -268,61 +256,6 @@ private fun PentraTopBar(
                 modifier = Modifier.weight(1f)
             )
 
-            // Shuffle toggle
-            FilterChip(
-                selected = shuffle,
-                onClick = onShuffleToggle,
-                label = { Text("Shuffle", style = MaterialTheme.typography.labelMedium) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Accent.copy(alpha = 0.15f),
-                    selectedLabelColor = Accent,
-                    containerColor = SurfaceElevated,
-                    labelColor = TextSecondary
-                ),
-                border = FilterChipDefaults.filterChipBorder(
-                    enabled = true,
-                    selected = shuffle,
-                    borderColor = Divider,
-                    selectedBorderColor = Accent.copy(alpha = 0.4f)
-                ),
-                modifier = Modifier.padding(end = 8.dp)
-            )
-
-            // Interval picker
-            Box {
-                FilterChip(
-                    selected = intervalMinutes > 0,
-                    onClick = { showIntervalMenu = true },
-                    label = { Text(currentLabel, style = MaterialTheme.typography.labelMedium) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Accent.copy(alpha = 0.15f),
-                        selectedLabelColor = Accent,
-                        containerColor = SurfaceElevated,
-                        labelColor = TextSecondary
-                    ),
-                    border = FilterChipDefaults.filterChipBorder(
-                        enabled = true,
-                        selected = intervalMinutes > 0,
-                        borderColor = Divider,
-                        selectedBorderColor = Accent.copy(alpha = 0.4f)
-                    ),
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-                DropdownMenu(
-                    expanded = showIntervalMenu,
-                    onDismissRequest = { showIntervalMenu = false },
-                    containerColor = SurfaceElevated
-                ) {
-                    intervals.forEach { (minutes, label) ->
-                        DropdownMenuItem(
-                            text = { Text(label, color = if (minutes == intervalMinutes) Accent else TextPrimary, style = MaterialTheme.typography.bodyMedium) },
-                            onClick = { onIntervalChange(minutes); showIntervalMenu = false }
-                        )
-                    }
-                }
-            }
-
-            // Settings
             IconButton(onClick = onSettingsClick) {
                 Icon(Icons.Default.Settings, contentDescription = "Settings", tint = TextSecondary)
             }
