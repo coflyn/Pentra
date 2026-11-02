@@ -18,9 +18,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import coil.compose.AsyncImage
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
@@ -183,19 +185,26 @@ private fun LiveWallpaperPreview(
     brightness: Float
 ) {
     val context = LocalContext.current
-
-    val player = remember(path) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(path))
-            repeatMode = Player.REPEAT_MODE_ONE
-            volume = 0f
-            prepare()
-            play()
-        }
+    val isImage = remember(path) {
+        val lower = path.lowercase()
+        lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") ||
+        lower.endsWith(".webp") || lower.endsWith(".heic")
     }
 
+    val player = if (!isImage) {
+        remember(path) {
+            ExoPlayer.Builder(context).build().apply {
+                setMediaItem(MediaItem.fromUri(path))
+                repeatMode = Player.REPEAT_MODE_ONE
+                volume = 0f
+                prepare()
+                play()
+            }
+        }
+    } else null
+
     DisposableEffect(path) {
-        onDispose { player.release() }
+        onDispose { player?.release() }
     }
 
     val blurModifier = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && blurRadius > 0.5f) {
@@ -219,36 +228,47 @@ private fun LiveWallpaperPreview(
                 .clip(RoundedCornerShape(16.dp))
                 .background(SurfaceElevated)
         ) {
-            // AspectRatioFrameLayout + TextureView preserves aspect ratio and prevents distortion (gepeng).
-            // TextureView ensures no bottom-sheet scrim punch-through.
-            AndroidView(
-                factory = { ctx ->
-                    AspectRatioFrameLayout(ctx).apply {
-                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                        val tv = TextureView(ctx).apply {
-                            layoutParams = FrameLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
-                            )
-                        }
-                        addView(tv)
-                        player.setVideoTextureView(tv)
-                        player.addListener(object : Player.Listener {
-                            override fun onVideoSizeChanged(videoSize: VideoSize) {
-                                if (videoSize.width > 0 && videoSize.height > 0) {
-                                    setAspectRatio(videoSize.width.toFloat() / videoSize.height.toFloat())
-                                }
+            if (isImage) {
+                AsyncImage(
+                    model = path,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(blurModifier)
+                )
+            } else if (player != null) {
+                // AspectRatioFrameLayout + TextureView preserves aspect ratio and prevents distortion (gepeng).
+                // TextureView ensures no bottom-sheet scrim punch-through.
+                AndroidView(
+                    factory = { ctx ->
+                        AspectRatioFrameLayout(ctx).apply {
+                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                            val tv = TextureView(ctx).apply {
+                                layoutParams = FrameLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
                             }
-                        })
-                        if (player.videoSize.width > 0 && player.videoSize.height > 0) {
-                            setAspectRatio(player.videoSize.width.toFloat() / player.videoSize.height.toFloat())
+                            addView(tv)
+                            player.setVideoTextureView(tv)
+                            player.addListener(object : Player.Listener {
+                                override fun onVideoSizeChanged(videoSize: VideoSize) {
+                                    if (videoSize.width > 0 && videoSize.height > 0) {
+                                        setAspectRatio(videoSize.width.toFloat() / videoSize.height.toFloat())
+                                    }
+                                }
+                            })
+                            if (player.videoSize.width > 0 && player.videoSize.height > 0) {
+                                setAspectRatio(player.videoSize.width.toFloat() / player.videoSize.height.toFloat())
+                            }
                         }
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(blurModifier)
-            )
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(blurModifier)
+                )
+            }
 
             if (darknessAlpha > 0.01f) {
                 Box(

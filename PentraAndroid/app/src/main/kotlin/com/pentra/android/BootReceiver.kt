@@ -11,8 +11,6 @@ class BootReceiver : BroadcastReceiver() {
         ) return
 
         // If the user had a wallpaper active before reboot, Android restores
-        // WallpaperService automatically. BootReceiver exists to re-apply
-        // settings that may have been cleared (e.g., playing override reset).
-        WallpaperPrefs.setPlayingOverride(context, true)
+        // WallpaperService automatically. User's playingOverride is preserved.
     }
 }
