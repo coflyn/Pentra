@@ -136,7 +136,8 @@ class WallpaperSettings: ObservableObject {
     
     @Published var activeItems: [PlaylistItem] = []
     private var playlistTimer: Timer?
-    private var currentIndex: Int = 0
+    @AppStorage("currentWallpaperIndex") var currentIndex: Int = 0
+    private var syncToggle: Bool = false
     private var syncTask: Task<Void, Never>?
     private var transitionWorkItem: DispatchWorkItem?
     
@@ -182,7 +183,7 @@ class WallpaperSettings: ObservableObject {
         
         if !paths.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                if let item = self?.activeItems.first {
+                if let item = self?.activeItems.last {
                     self?.syncNativeWallpaper(with: item)
                 }
             }
@@ -211,12 +212,13 @@ class WallpaperSettings: ObservableObject {
             activeItems.append(newItem)
         }
         
+        syncNativeWallpaper(with: newItem)
+        
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             if self.activeItems.count > 1 {
                 self.activeItems.removeFirst(self.activeItems.count - 1)
             }
-            self.syncNativeWallpaper(with: newItem)
             self.transitionWorkItem = nil
         }
         transitionWorkItem = workItem
@@ -251,12 +253,13 @@ class WallpaperSettings: ObservableObject {
                 self.activeItems.append(newItem)
             }
             
+            self.syncNativeWallpaper(with: newItem)
+            
             let workItem = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
                 if self.activeItems.count > 1 {
                     self.activeItems.removeFirst(self.activeItems.count - 1)
                 }
-                self.syncNativeWallpaper(with: newItem)
                 self.transitionWorkItem = nil
             }
             self.transitionWorkItem = workItem
@@ -345,10 +348,11 @@ class WallpaperSettings: ObservableObject {
             let syncA = syncDir.appendingPathComponent("pentra_sync_a.png")
             let syncB = syncDir.appendingPathComponent("pentra_sync_b.png")
             
-            let currentURL = await MainActor.run {
-                NSScreen.main.flatMap { NSWorkspace.shared.desktopImageURL(for: $0) }
+            let useB = await MainActor.run { () -> Bool in
+                self.syncToggle.toggle()
+                return self.syncToggle
             }
-            let targetURL = (currentURL?.lastPathComponent == "pentra_sync_a.png") ? syncB : syncA
+            let targetURL = useB ? syncB : syncA
             
             do {
                 try pngData.write(to: targetURL)
@@ -362,7 +366,11 @@ class WallpaperSettings: ObservableObject {
                         .allowClipping: true
                     ]
                     for screen in screens {
-                        try? NSWorkspace.shared.setDesktopImageURL(targetURL, for: screen, options: options)
+                        do {
+                            try NSWorkspace.shared.setDesktopImageURL(targetURL, for: screen, options: options)
+                        } catch {
+                            print("Failed to set desktop image: \(error)")
+                        }
                     }
                 }
             } catch {
