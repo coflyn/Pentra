@@ -168,7 +168,7 @@ struct ContentView: View {
                                 .foregroundColor(.secondary)
                         }
                         
-                        Text("Version 1.2.0 • © 2026 Coflyn")
+                        Text("Version 1.3.0 • © 2026 Coflyn")
                             .font(.system(size: 9))
                             .foregroundColor(.secondary.opacity(0.5))
                     }
